@@ -2,7 +2,7 @@
 Application configuration using pydantic-settings.
 """
 from typing import List, Optional, Union
-from pydantic import AnyHttpUrl, Field, PostgresDsn, validator
+from pydantic import Field, PostgresDsn, validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import secrets
 
@@ -14,6 +14,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
+        extra="ignore",  # Ignore extra fields from .env
     )
     
     # Project info
@@ -26,22 +27,24 @@ class Settings(BaseSettings):
     SECRET_KEY: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
     
     # Database
-    DATABASE_URL: PostgresDsn = Field(..., description="PostgreSQL connection URL")
-    
-    @validator("DATABASE_URL", pre=True)
-    def assemble_db_connection(cls, v: Optional[str]) -> str:
-        if isinstance(v, str):
-            return v
-        raise ValueError("DATABASE_URL must be a string")
+    DATABASE_URL: str = Field(
+        default="postgresql://stonesoup:stonesoup_dev@localhost:5432/stonesoup",
+        description="PostgreSQL connection URL"
+    )
     
     # Redis
-    REDIS_URL: str = Field(..., description="Redis connection URL")
+    REDIS_URL: str = Field(
+        default="redis://localhost:6379",
+        description="Redis connection URL"
+    )
     
     # CORS
-    BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = Field(
+    BACKEND_CORS_ORIGINS: List[str] = Field(
         default=[
             "http://localhost:3000",
             "http://localhost:8000",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:8000",
         ]
     )
     
@@ -54,12 +57,15 @@ class Settings(BaseSettings):
         raise ValueError(v)
     
     # Clerk Authentication
-    CLERK_SECRET_KEY: str = Field(..., description="Clerk secret key")
-    CLERK_PUBLISHABLE_KEY: str = Field(..., description="Clerk publishable key")
+    CLERK_SECRET_KEY: str = Field(default="", description="Clerk secret key")
+    CLERK_PUBLISHABLE_KEY: str = Field(default="", description="Clerk publishable key")
     CLERK_JWT_VERIFICATION_KEY: Optional[str] = Field(None, description="Clerk JWT verification key")
     
     # OpenAI
-    OPENAI_API_KEY: str = Field(..., description="OpenAI API key")
+    OPENAI_API_KEY: str = Field(default="", description="OpenAI API key")
+    
+    # OpenRouter
+    OPENROUTER_API_KEY: str = Field(default="", description="OpenRouter API key")
     
     # Sentry
     SENTRY_DSN: Optional[str] = Field(None, description="Sentry DSN for error tracking")

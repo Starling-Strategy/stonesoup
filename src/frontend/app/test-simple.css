@@ -1,0 +1,12 @@
+/* Simple test CSS */
+body {
+  background-color: #f0f0f0;
+  color: #333;
+  font-family: sans-serif;
+}
+
+.test-red {
+  background-color: red;
+  color: white;
+  padding: 10px;
+}

@@ -1,1 +1,1 @@
-# Endpoints module
+"""API v1 endpoints package."""

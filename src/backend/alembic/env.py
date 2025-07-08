@@ -1,22 +1,34 @@
 """
-Alembic environment configuration.
+Alembic environment configuration for STONESOUP.
+
+This configuration supports:
+- Async SQLAlchemy with asyncpg
+- Automatic model discovery
+- pgvector extension management
+- Multi-tenant migrations
 """
 from logging.config import fileConfig
-from sqlalchemy import engine_from_config
+from sqlalchemy import engine_from_config, text
 from sqlalchemy import pool
 from alembic import context
 import os
 import sys
 from pathlib import Path
+import asyncio
+from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from app.core.config import settings
-from app.db.base import Base
+from app.db.base_class import Base
 
-# Import all models to ensure they're registered
-from app.models import *  # noqa
+# Import all models to ensure they're registered with SQLAlchemy
+# This is critical for Alembic to detect all tables and generate proper migrations
+from app.models.cauldron import Cauldron  # noqa: F401
+from app.models.member import Member  # noqa: F401  
+from app.models.story import Story, story_members  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -70,6 +82,24 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def do_run_migrations(connection: Connection) -> None:
+    """
+    Run migrations with the given connection.
+    
+    This function handles the actual migration execution,
+    including pgvector extension setup.
+    """
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+        compare_server_default=True,
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode.
 
@@ -86,12 +116,24 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        # Ensure pgvector extension exists
+        connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        connection.commit()
+        
+        do_run_migrations(connection)
 
-        with context.begin_transaction():
-            context.run_migrations()
+
+async def run_async_migrations() -> None:
+    """
+    Run migrations in async mode for async SQLAlchemy.
+    
+    This is an alternative approach that works with async engines.
+    """
+    from app.db.session import engine
+    
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await conn.run_sync(do_run_migrations)
 
 
 if context.is_offline_mode():

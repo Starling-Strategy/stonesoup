@@ -97,11 +97,48 @@ docker-compose up --build  # Build and run all services
 - Include confidence score handling
 - Comment on why specific agents are chosen for tasks
 
-### Gemini API Integration
-- Always include error handling for API calls
-- Log API usage and costs
-- Implement retry logic with exponential backoff
-- Document prompt engineering decisions
+### AI Model Integration (OpenRouter)
+- **Primary Provider**: OpenRouter for unified AI access
+- **Models Available**: Gemini, GPT-4, Claude, and others
+- **Always include error handling for API calls**
+- **Log API usage and costs** (OpenRouter tracks per-request)
+- **Implement retry logic with exponential backoff**
+- **Document prompt engineering decisions**
+- **Use model-specific features** when beneficial
+
+### OpenRouter Configuration
+```python
+# Default configuration uses Gemini via OpenRouter
+from app.ai import openrouter_client
+
+# Text generation
+response = await openrouter_client.generate_text(
+    prompt="Your prompt here",
+    system_instruction="You are a helpful assistant",
+    temperature=0.7
+)
+
+# Embeddings (using OpenAI's model via OpenRouter)
+embedding = await openrouter_client.generate_embedding(
+    text="Text to embed"
+)
+
+# Use different models when needed
+response = await openrouter_client.generate_text(
+    prompt="Complex reasoning task",
+    model="anthropic/claude-3-opus"  # Use Claude for complex tasks
+)
+
+# Cost tracking
+stats = openrouter_client.get_usage_stats()
+print(f"Total cost: {stats['total_cost']}")
+```
+
+### Available Models via OpenRouter
+- **google/gemini-pro-1.5**: Default for general tasks
+- **openai/gpt-4-turbo**: For complex reasoning
+- **anthropic/claude-3-opus**: For nuanced understanding
+- **openai/text-embedding-3-small**: For embeddings (1536 dimensions)
 
 ### Data Quality & Confidence
 - Include confidence scores for all AI-generated content
@@ -140,24 +177,30 @@ docker-compose up --build  # Build and run all services
 # AI API calls with Sentry integration
 import sentry_sdk
 from sentry_sdk import capture_exception
+from app.ai import openrouter_client
 
 try:
-    response = await gemini_client.generate_content(prompt)
-    if response.confidence < CONFIDENCE_THRESHOLD:
+    response = await openrouter_client.generate_text(
+        prompt=prompt,
+        system_instruction="You are a helpful assistant"
+    )
+    if response.confidence_score < CONFIDENCE_THRESHOLD:
         # Queue for human review
         await queue_for_review(response)
-except APIException as e:
+except Exception as e:
     # Capture in Sentry with context
     sentry_sdk.set_context("ai_request", {
         "cauldron_id": cauldron_id,
         "prompt_type": prompt_type,
-        "model": "gemini-pro"
+        "model": response.model if 'response' in locals() else "unknown",
+        "provider": "openrouter"
     })
     capture_exception(e)
     
-    logger.error(f"Gemini API error: {e}", extra={"cauldron_id": cauldron_id})
+    logger.error(f"OpenRouter API error: {e}", extra={"cauldron_id": cauldron_id})
     # Fallback to cached/default response
 ```
+
 
 ## Security Considerations
 - **Multi-tenant isolation**: PostgreSQL Row Level Security (RLS) by cauldron_id
@@ -185,12 +228,177 @@ except APIException as e:
 - **Fallback strategies**: Always have non-AI alternatives
 - **Human-in-the-loop**: Design for human oversight and intervention
 
+## Learning-First Implementation Guidelines
+
+### Every Component Must Teach
+When implementing any feature, follow these practices:
+
+1. **Add "Learning Note" Comment Blocks**
+```python
+# Learning Note: Vector Search Explained
+# =====================================
+# Vector search finds similar content by comparing numerical representations
+# of text. Think of it like finding similar colors in a color space - 
+# texts with similar meanings are "close" in vector space.
+#
+# We use 1536 dimensions because that's what OpenAI's embedding model outputs.
+# Each dimension captures some aspect of meaning.
+#
+# See: docs/architecture/concepts/vector-search.md for deep dive
+```
+
+2. **Document Trade-offs in Code**
+```python
+# We chose cosine similarity over Euclidean distance because:
+# 1. It's scale-invariant (magnitude doesn't matter)
+# 2. Better for high-dimensional spaces
+# 3. Standard for text embeddings
+# Trade-off: Slightly slower computation
+```
+
+3. **Explain Complex Logic Step-by-Step**
+```python
+async def hybrid_search(query: str, limit: int = 10):
+    """
+    Hybrid search combines text and vector search for best results.
+    
+    Learning Path:
+    1. Text search finds exact keyword matches (good for names, specific terms)
+    2. Vector search finds semantic similarity (good for concepts, skills)
+    3. We combine scores with weights to balance both approaches
+    
+    This gives us the best of both worlds: precision and understanding.
+    """
+    # Step 1: Get text search results (exact matches score higher)
+    text_results = await text_search(query)
+    
+    # Step 2: Generate embedding for semantic search
+    # This converts the query into a 1536-dimensional vector
+    query_embedding = await generate_embedding(query)
+    
+    # Step 3: Find semantically similar content
+    vector_results = await vector_search(query_embedding)
+    
+    # Step 4: Combine and rank results
+    # Text matches get 0.3 weight, semantic matches get 0.7 weight
+    # This bias toward semantic search handles synonyms and related concepts
+    combined = combine_results(text_results, vector_results, weights=(0.3, 0.7))
+    
+    return combined[:limit]
+```
+
+4. **Use Descriptive Names That Teach**
+```python
+# Bad: emb, sim, calc_dist
+# Good: member_embedding, cosine_similarity, calculate_vector_distance
+
+# Bad: process_data()
+# Good: extract_skills_from_bio()
+
+# Bad: DIMS = 1536
+# Good: OPENAI_EMBEDDING_DIMENSIONS = 1536  # OpenAI text-embedding-3-small output size
+```
+
+5. **Link to Deeper Resources**
+```python
+# For deep dive on pgvector indexing strategies, see:
+# - docs/architecture/concepts/vector-indexes.md
+# - https://github.com/pgvector/pgvector#indexing
+# 
+# TLDR: We use IVFFlat for balanced speed/accuracy on our data size
+```
+
+### Architecture Documentation Requirements
+
+For every significant implementation:
+
+1. **Create an ADR (Architecture Decision Record)**
+   - Location: `docs/architecture/decisions/ADR-XXX-title.md`
+   - Template: Decision, Rationale, Consequences, Alternatives
+   - Include learning notes about why alternatives were rejected
+
+2. **Add Concept Guides for Complex Topics**
+   - Location: `docs/architecture/concepts/topic-name.md`
+   - Explain the concept in plain language first
+   - Then dive into technical implementation
+   - Include diagrams where helpful
+
+3. **Write Step-by-Step Tutorials**
+   - Location: `docs/tutorials/task-name.md`
+   - Show the complete flow through the system
+   - Explain what happens at each step
+   - Include common gotchas and troubleshooting
+
+### Code Review Checklist for Learning
+
+Before committing code, ensure:
+- [ ] Complex functions have learning note comments
+- [ ] Trade-offs are documented where decisions were made
+- [ ] Variable names are descriptive and educational
+- [ ] Links to documentation are included for deep topics
+- [ ] A junior developer could understand the implementation
+- [ ] The "why" is as clear as the "what"
+
+### Example: Implementing a New Feature
+
+When adding a new feature like member search:
+
+1. **Start with Documentation**
+   - Write `docs/architecture/decisions/ADR-002-search-implementation.md`
+   - Explain why hybrid search, what alternatives exist
+
+2. **Implement with Teaching Comments**
+   - Each function explains its purpose and approach
+   - Complex algorithms have step-by-step breakdowns
+   - Edge cases are documented with examples
+
+3. **Create a Concept Guide**
+   - Write `docs/architecture/concepts/hybrid-search.md`
+   - Explain text vs. vector search
+   - Show when each is better with examples
+
+4. **Add a Tutorial**
+   - Write `docs/tutorials/searching-for-members.md`
+   - Walk through a search request end-to-end
+   - Show how data flows through the system
+
 ## Learning Resources Integration
 - Include links to relevant documentation in comments
 - Explain complex concepts with examples
 - Use meaningful variable names that describe purpose
 - Write tests that demonstrate intended behavior
 - Create documentation that teaches, not just describes
+
+## Railway Auto-Configuration
+
+### Automatic Database Connection
+Railway integration provides zero-configuration database setup:
+```python
+# The app automatically retrieves connection strings on startup
+# No manual configuration needed when deployed to Railway
+
+# app/core/railway_client.py handles:
+# - PostgreSQL URL retrieval via Railway API
+# - Redis URL retrieval
+# - Service health monitoring
+# - Automatic environment variable setting
+
+# Manual override still possible:
+DATABASE_URL=postgresql://...  # Set this to override auto-config
+REDIS_URL=redis://...          # Set this to override auto-config
+```
+
+### Railway Environment Variables
+```bash
+# Required in .env
+RAILWAY_TOKEN=your-railway-api-token
+RAILWAY_PROJECT_ID=your-project-id
+RAILWAY_ENVIRONMENT=production  # optional, defaults to production
+
+# Auto-configured (retrieved from Railway)
+DATABASE_URL      # PostgreSQL with pgvector
+REDIS_URL        # Redis for caching/queues
+```
 
 ## PostgreSQL with pgvector Setup
 

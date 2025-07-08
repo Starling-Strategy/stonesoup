@@ -34,10 +34,6 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
 )
 
-# Create declarative base
-Base = declarative_base()
-
-
 # Dependency to get DB session
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """

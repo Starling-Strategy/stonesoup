@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with pgvector
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: stonesoup-postgres
+    environment:
+      POSTGRES_USER: stonesoup
+      POSTGRES_PASSWORD: stonesoup_dev
+      POSTGRES_DB: stonesoup
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stonesoup"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and Celery
+  redis:
+    image: redis:7-alpine
+    container_name: stonesoup-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API (FastAPI)
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    container_name: stonesoup-backend
+    environment:
+      DATABASE_URL: postgresql://stonesoup:stonesoup_dev@postgres:5432/stonesoup
+      REDIS_URL: redis://redis:6379
+      ENVIRONMENT: development
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src/backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker
+  celery:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    container_name: stonesoup-celery
+    environment:
+      DATABASE_URL: postgresql://stonesoup:stonesoup_dev@postgres:5432/stonesoup
+      REDIS_URL: redis://redis:6379
+      ENVIRONMENT: development
+    env_file:
+      - .env
+    volumes:
+      - ./src/backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.background.celery_app worker --loglevel=info
+
+  # Frontend (Next.js) - Development
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      target: development
+    container_name: stonesoup-frontend
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./src/frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:

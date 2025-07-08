@@ -13,6 +13,7 @@ pgvector==0.2.3
 
 # Authentication
 pyjwt[crypto]==2.8.0
+python-jose[cryptography]==3.3.0
 httpx==0.25.2
 cryptography==41.0.7
 

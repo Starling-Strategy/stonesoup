@@ -1,31 +1,61 @@
 """
-Member model with pgvector support.
+Member model with pgvector support and multi-tenancy.
+
+Members represent users in the STONESOUP talent marketplace. Each member
+belongs to a specific cauldron (organization) and has a profile that can
+be searched using semantic similarity via pgvector embeddings.
+
+The model supports:
+- Multi-tenancy through cauldron_id
+- Semantic search via profile embeddings
+- Rich profile information including skills and expertise
+- Integration with Clerk for authentication
+- Social and portfolio links
 """
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from sqlalchemy import Column, String, Text, Float, Boolean, DateTime, JSON, Index
+from sqlalchemy import Column, String, Text, Float, Boolean, DateTime, JSON, Index, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 import uuid
 
-from app.db.base import Base
+from app.db.base_class import BaseModel, CauldronMixin
 
 
-class Member(Base):
+class Member(BaseModel, CauldronMixin):
     """Member model representing users in the talent marketplace."""
     
     __tablename__ = "members"
     
-    # Primary key
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
     # Clerk user ID (external reference)
-    clerk_user_id = Column(String, unique=True, nullable=False, index=True)
+    # Note: We use a composite unique constraint with cauldron_id to allow
+    # the same Clerk user to be a member of multiple cauldrons
+    clerk_user_id = Column(
+        String,
+        nullable=False,
+        index=True,
+        comment="Clerk authentication user ID"
+    )
     
     # Basic information
-    email = Column(String, unique=True, nullable=False, index=True)
-    name = Column(String, nullable=False)
-    username = Column(String, unique=True, nullable=True, index=True)
+    email = Column(
+        String,
+        nullable=False,
+        index=True,
+        comment="Member's email address"
+    )
+    name = Column(
+        String,
+        nullable=False,
+        comment="Member's display name"
+    )
+    username = Column(
+        String,
+        nullable=True,
+        index=True,
+        comment="Optional username for profile URLs"
+    )
     
     # Profile information
     bio = Column(Text, nullable=True)
@@ -61,33 +91,61 @@ class Member(Base):
     portfolio_urls = Column(JSON, default=list)
     
     # Metadata
-    metadata = Column(JSON, default=dict)
+    extra_metadata = Column(JSON, default=dict)
     
-    # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    last_active_at = Column(DateTime, default=datetime.utcnow, nullable=True)
+    # Additional timestamps
+    last_active_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=True,
+        comment="Last time the member was active on the platform"
+    )
     
-    # Indexes for performance
+    # Relationships
+    member_stories = relationship(
+        "Story",
+        secondary="story_members",
+        back_populates="members",
+        lazy="selectin"
+    )
+    
+    reviewed_stories = relationship(
+        "Story",
+        foreign_keys="Story.reviewed_by_id",
+        back_populates="reviewer"
+    )
+    
+    # Indexes and constraints for performance and data integrity
     __table_args__ = (
+        # Unique constraints for multi-tenancy
+        UniqueConstraint("cauldron_id", "email", name="uq_members_cauldron_email"),
+        UniqueConstraint("cauldron_id", "username", name="uq_members_cauldron_username"),
+        UniqueConstraint("cauldron_id", "clerk_user_id", name="uq_members_cauldron_clerk_user"),
+        
+        # Performance indexes
+        Index("ix_members_cauldron_is_active", "cauldron_id", "is_active"),
         Index("ix_members_is_active_is_available", "is_active", "is_available"),
         Index("ix_members_skills", "skills", postgresql_using="gin"),
         Index("ix_members_expertise_areas", "expertise_areas", postgresql_using="gin"),
         Index("ix_members_industries", "industries", postgresql_using="gin"),
-        # Create an index for vector similarity search
+        
+        # Create HNSW index for vector similarity search
+        # HNSW (Hierarchical Navigable Small World) provides better performance
+        # for high-dimensional vector searches compared to IVFFlat
         Index(
-            "ix_members_profile_embedding",
+            "ix_members_profile_embedding_hnsw",
             "profile_embedding",
-            postgresql_using="ivfflat",
-            postgresql_with={"lists": 100},
-            postgresql_ops={"profile_embedding": "vector_l2_ops"}
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"profile_embedding": "vector_cosine_ops"}
         ),
     )
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert model to dictionary."""
         return {
-            "id": str(self.id),
+            **super().to_dict(),  # Include base fields (id, created_at, updated_at)
+            "cauldron_id": str(self.cauldron_id) if self.cauldron_id else None,
             "clerk_user_id": self.clerk_user_id,
             "email": self.email,
             "name": self.name,
@@ -112,9 +170,7 @@ class Member(Base):
             "twitter_url": self.twitter_url,
             "website_url": self.website_url,
             "portfolio_urls": self.portfolio_urls or [],
-            "metadata": self.metadata or {},
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "extra_metadata": self.extra_metadata or {},
             "last_active_at": self.last_active_at.isoformat() if self.last_active_at else None,
         }
     
